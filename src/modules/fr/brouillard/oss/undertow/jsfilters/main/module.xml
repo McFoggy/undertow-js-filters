@@ -21,6 +21,8 @@
         <resource-root path="${project.build.finalName}.jar"/>
     </resources>
     <dependencies>
+        <module name="javax.api"/>
         <module name="io.undertow.core"/>
+        <module name="sun.jdk" services="import" />
     </dependencies>
 </module>

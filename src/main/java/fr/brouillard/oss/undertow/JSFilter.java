@@ -19,8 +19,17 @@ import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.HttpString;
 
+import javax.script.*;
+import java.io.File;
+import java.io.FileReader;
+import java.util.logging.Logger;
+import java.util.stream.Collectors;
+
 public class JSFilter implements HttpHandler {
+    private static final Logger LOGGER = Logger.getLogger(JSFilter.class.getName());
+
     private final HttpHandler next;
+    private String fileName;
 
     public JSFilter(HttpHandler next) {
         this.next = next;
@@ -28,7 +37,66 @@ public class JSFilter implements HttpHandler {
 
     @Override
     public void handleRequest(HttpServerExchange exchange) throws Exception {
-        exchange.getResponseHeaders().add(HttpString.tryFromString("X-jsfilter-version"), ProjectProperties.getVersion());
-        next.handleRequest(exchange);
+        // don't do anything on NIO dispatching thread
+        if (exchange.isInIoThread()) {
+            exchange.dispatch(this);
+            return;
+        }
+
+        if (this.fileName != null) {
+            File file = new File(this.fileName);
+
+            if (file.canRead()) {
+                ScriptEngineManager scriptEngineManager = new ScriptEngineManager(JSFilter.class.getClassLoader());
+                String engines = scriptEngineManager.getEngineFactories().stream().map(ScriptEngineFactory::getEngineName).collect(Collectors.joining());
+
+                LOGGER.config("undertow-jsfilters: found engines: " + engines);
+
+                ScriptEngine engine = scriptEngineManager.getEngineByName("JavaScript");
+                if (engine == null) {
+                    LOGGER.warning("undertow-jsfilters: No JavaScript engine found, only found: " + engines);
+                    next.handleRequest(exchange);
+                    return;
+                }
+                LOGGER.config("undertow-jsfilters: using JavaScript engine: " + engine.getFactory().getEngineName());
+                try {
+                    engine.eval(new FileReader(file));
+                } catch (Exception evaluationException) {
+                    LOGGER.config("undertow-jsfilters: cannot evaluate js file => " + this.fileName);
+                    LOGGER.throwing(JSFilter.class.getName(), "handleRequest", evaluationException);
+                    next.handleRequest(exchange);
+                    return;
+                }
+
+                Logger scriptLogger = Logger.getLogger(JSFilter.class.getName() + "." + file.getName());
+                Invocable invocable = (Invocable) engine;
+
+                try {
+                    JSFilterData data = new JSFilterData(exchange, next, scriptLogger, new PropertiesResolver());
+                    invocable.invokeFunction("handleRequest", data);
+                } catch (ScriptException | NoSuchMethodException invocationException) {
+                    LOGGER.warning("undertow-jsfilters: failure calling method '" + "handleRequest" + "' in file => " + this.fileName);
+                    LOGGER.throwing(fileName, "handleRequest", invocationException);
+                    next.handleRequest(exchange);
+                    return;
+                }
+            } else {
+                LOGGER.config("undertow-jsfilters: cannot read file => " + this.fileName);
+                next.handleRequest(exchange);
+                return;
+            }
+        } else {
+            LOGGER.config("undertow-jsfilters: missing expected parameter 'fileName'");
+            next.handleRequest(exchange);
+            return;
+        }
+    }
+
+    public String getFileName() {
+        return fileName;
+    }
+
+    public void setFileName(String fileName) {
+        this.fileName = fileName;
     }
 }
