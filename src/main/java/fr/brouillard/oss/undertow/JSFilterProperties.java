@@ -15,21 +15,30 @@
  */
 package fr.brouillard.oss.undertow;
 
-import java.util.function.Function;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
 
-public class PropertiesResolver implements Function<String, String> {
-    @Override
-    public String apply(String s) {
-        if (s == null) {
-            return null;
+public class JSFilterProperties {
+    private final static Properties p = new Properties();
+
+    static {
+        try (InputStream is = JSFilterProperties.class.getResourceAsStream("/META-INF/project.properties")) {
+            if (is != null) {
+                p.load(is);
+            }
+        } catch (IOException e) {
+            // ignore
         }
+    }
 
-        if (s.startsWith("env:")) {
-            return System.getProperty(s.substring("env:".length()), s);
-        } else if (s.startsWith("prj:")) {
-            return ProjectProperties.get().getOrDefault(s.substring("prj:".length()), s);
-        }
+    public static String getVersion() {
+        return p.getProperty("version");
+    }
 
-        return s;
+    public static String get(String key, String defaultValue) {
+        return p.getProperty(key, defaultValue);
     }
 }

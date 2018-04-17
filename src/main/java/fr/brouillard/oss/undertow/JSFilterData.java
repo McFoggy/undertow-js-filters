@@ -25,13 +25,11 @@ public class JSFilterData {
     private final HttpServerExchange exchange;
     private final HttpHandler nextHttpHandler;
     private final Logger logger;
-    private final PropertiesResolver properties;
 
-    public JSFilterData(HttpServerExchange exchange, HttpHandler next, Logger scriptLogger, PropertiesResolver propertiesResolver) {
+    public JSFilterData(HttpServerExchange exchange, HttpHandler next, Logger scriptLogger) {
         this.exchange = exchange;
         this.nextHttpHandler = next;
         this.logger = scriptLogger;
-        this.properties = propertiesResolver;
     }
 
     public HttpServerExchange getExchange() {
@@ -44,10 +42,6 @@ public class JSFilterData {
 
     public Logger getLogger() {
         return logger;
-    }
-
-    public PropertiesResolver getProperties() {
-        return properties;
     }
 
     public HttpString httpString(String s) {

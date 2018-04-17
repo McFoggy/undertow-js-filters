@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 var handleRequest = function(data) {
-    var header = data.httpString('X-jsfilters-version');
-    var version = data.getProperties().apply('prj:version');
+    var hs = Java.type('io.undertow.util.HttpString');
+    var header = hs.tryFromString('X-JSFilters-Version');
+
+    var filterProperties = Java.type('fr.brouillard.oss.undertow.JSFilterProperties');
+    var version = filterProperties.getVersion();
 
     data.getExchange().getResponseHeaders().add(header, version);
     data.getNextHttpHandler().handleRequest(data.getExchange());

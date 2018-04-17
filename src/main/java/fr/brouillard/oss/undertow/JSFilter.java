@@ -17,13 +17,12 @@ package fr.brouillard.oss.undertow;
 
 import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
-import io.undertow.util.HttpString;
+import jdk.nashorn.api.scripting.NashornScriptEngineFactory;
 
 import javax.script.*;
 import java.io.File;
 import java.io.FileReader;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
 
 public class JSFilter implements HttpHandler {
     private static final Logger LOGGER = Logger.getLogger(JSFilter.class.getName());
@@ -47,14 +46,11 @@ public class JSFilter implements HttpHandler {
             File file = new File(this.fileName);
 
             if (file.canRead()) {
-                ScriptEngineManager scriptEngineManager = new ScriptEngineManager(JSFilter.class.getClassLoader());
-                String engines = scriptEngineManager.getEngineFactories().stream().map(ScriptEngineFactory::getEngineName).collect(Collectors.joining());
+                ClassLoader jsClassloader = JSFilter.class.getClassLoader();
+                ScriptEngine engine = new NashornScriptEngineFactory().getScriptEngine(jsClassloader);
 
-                LOGGER.config("undertow-jsfilters: found engines: " + engines);
-
-                ScriptEngine engine = scriptEngineManager.getEngineByName("JavaScript");
                 if (engine == null) {
-                    LOGGER.warning("undertow-jsfilters: No JavaScript engine found, only found: " + engines);
+                    LOGGER.warning("undertow-jsfilters: Nashorn JavaScript engine not found");
                     next.handleRequest(exchange);
                     return;
                 }
@@ -72,7 +68,7 @@ public class JSFilter implements HttpHandler {
                 Invocable invocable = (Invocable) engine;
 
                 try {
-                    JSFilterData data = new JSFilterData(exchange, next, scriptLogger, new PropertiesResolver());
+                    JSFilterData data = new JSFilterData(exchange, next, scriptLogger);
                     invocable.invokeFunction("handleRequest", data);
                 } catch (ScriptException | NoSuchMethodException invocationException) {
                     LOGGER.warning("undertow-jsfilters: failure calling method '" + "handleRequest" + "' in file => " + this.fileName);
