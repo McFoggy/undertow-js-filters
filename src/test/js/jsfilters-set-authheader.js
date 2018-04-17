@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 var handleRequest = function(data) {
-    var hs = Java.type('io.undertow.util.HttpString');
-    var header = hs.tryFromString('X-JSFilters-Version');
-
-    var filterProperties = Java.type('fr.brouillard.oss.undertow.JSFilterProperties');
-    var version = filterProperties.getVersion();
+	if (!data.getExchange().getRequestHeaders().contains('Authorization')) {
+		var hs = Java.type('io.undertow.util.HttpString');
+		var authHeader = hs.tryFromString('Authorization');
+		var authValue = 'Basic Ym9iOnRoZWJ1aWRsZXI=';		// bob:thebuilder
+		data.getExchange().getRequestHeaders().add(authHeader, authValue);
+	}
 	
-    data.getExchange().getResponseHeaders().add(header, version);
     data.getNextHttpHandler().handleRequest(data.getExchange());
 };
