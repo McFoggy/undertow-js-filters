@@ -19,9 +19,16 @@ import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import jdk.nashorn.api.scripting.NashornScriptEngineFactory;
 
-import javax.script.*;
+import javax.script.Invocable;
+import javax.script.ScriptEngine;
+import javax.script.ScriptException;
 import java.io.File;
 import java.io.FileReader;
+import java.io.IOException;
+import java.nio.file.*;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
 public class JSFilter implements HttpHandler {
@@ -29,6 +36,9 @@ public class JSFilter implements HttpHandler {
 
     private final HttpHandler next;
     private String fileName;
+    private String refresh;
+    private AtomicReference<Optional<ScriptRunner>> currentEngine = new AtomicReference<>();
+    private WatchKey currentWatchKey;
 
     public JSFilter(HttpHandler next) {
         this.next = next;
@@ -42,49 +52,128 @@ public class JSFilter implements HttpHandler {
             return;
         }
 
-        if (this.fileName != null) {
-            File file = new File(this.fileName);
+        // We check if the engine was initially loaded or at least tried to be loaded
+        if (currentEngine.get() == null) {
+            Optional<ScriptRunner> optRunner = loadAndSetScriptRunner();
+            if (Boolean.parseBoolean(refresh)) {
+                optRunner.ifPresent(runner -> {
+                    reloadOnChange(runner.getFile());
+                });
+            }
+        }
 
-            if (file.canRead()) {
-                ClassLoader jsClassloader = JSFilter.class.getClassLoader();
-                ScriptEngine engine = new NashornScriptEngineFactory().getScriptEngine(jsClassloader);
-
-                if (engine == null) {
-                    LOGGER.warning("undertow-jsfilters: Nashorn JavaScript engine not found");
-                    next.handleRequest(exchange);
-                    return;
-                }
-                LOGGER.config("undertow-jsfilters: using JavaScript engine: " + engine.getFactory().getEngineName());
-                try {
-                    engine.eval(new FileReader(file));
-                } catch (Exception evaluationException) {
-                    LOGGER.config("undertow-jsfilters: cannot evaluate js file => " + this.fileName);
-                    LOGGER.throwing(JSFilter.class.getName(), "handleRequest", evaluationException);
-                    next.handleRequest(exchange);
-                    return;
-                }
-
-                Logger scriptLogger = Logger.getLogger(JSFilter.class.getName() + "." + file.getName());
-                Invocable invocable = (Invocable) engine;
-
-                try {
-                    JSFilterData data = new JSFilterData(exchange, next, scriptLogger);
-                    invocable.invokeFunction("handleRequest", data);
-                } catch (ScriptException | NoSuchMethodException invocationException) {
-                    LOGGER.warning("undertow-jsfilters: failure calling method '" + "handleRequest" + "' in file => " + this.fileName);
-                    LOGGER.throwing(fileName, "handleRequest", invocationException);
-                    next.handleRequest(exchange);
-                    return;
-                }
-            } else {
-                LOGGER.config("undertow-jsfilters: cannot read file => " + this.fileName);
+        Optional<ScriptRunner> runner = currentEngine.get();
+        if (runner.isPresent()) {
+            try {
+                Invocable invocable = (Invocable) runner.get().getEngine();
+                JSFilterData data = new JSFilterData(exchange, next, runner.get().getScriptLogger());
+                invocable.invokeFunction("handleRequest", data);
+            } catch (ScriptException | NoSuchMethodException invocationException) {
+                LOGGER.warning("undertow-jsfilters: failure calling method '" + "handleRequest" + "' in file => " + this.fileName);
+                LOGGER.throwing(fileName, "handleRequest", invocationException);
                 next.handleRequest(exchange);
                 return;
             }
         } else {
-            LOGGER.config("undertow-jsfilters: missing expected parameter 'fileName'");
             next.handleRequest(exchange);
             return;
+        }
+    }
+
+    private Optional<ScriptRunner> loadAndSetScriptRunner() {
+        Optional<ScriptRunner> optRunner = loadScriptRunner();
+        currentEngine.set(optRunner);
+        return optRunner;
+    }
+
+    private void reloadOnChange(File jsFile) {
+        try {
+            FileSystem fileSystem = FileSystems.getDefault();
+            WatchService watchService = fileSystem.newWatchService();
+            Path jsDirectory = fileSystem.getPath(jsFile.getParent());
+            this.currentWatchKey = jsDirectory.register(watchService, StandardWatchEventKinds.ENTRY_MODIFY);
+
+            Thread watcherThread = new Thread(() -> {
+                AtomicBoolean listening = new AtomicBoolean(true);
+                while (listening.get()) {
+                    try {
+                        WatchKey wk;
+                        try {
+                            wk = watchService.take();
+                        } catch (InterruptedException ex) {
+                            return;
+                        }
+
+                        Thread.sleep( 200 );
+
+                        for (WatchEvent<?> event : wk.pollEvents()) {
+                            final Path changed = (Path) event.context();
+                            if (changed.endsWith(jsFile.getName())) {
+                                LOGGER.info("change detected on " + jsFile.getName() + ", reloading filter script, event " + event.toString());
+                                loadAndSetScriptRunner();
+                            }
+                        }
+                        // reset the key
+                        boolean valid = wk.reset();
+                        if (!valid) {
+                            break;
+                        }
+                    } catch (Exception ioe) {
+                        LOGGER.warning("problem occured while watching changes on " + jsFile.getName());
+                        LOGGER.throwing(JSFilter.class.getName() + ".thread", "run", ioe);
+                        listening.set(false);
+                    }
+                }
+                LOGGER.info("stop watching changes on " + jsFile.getName());
+            }, "JSFilter[" + jsFile.getName() + "] change detector");
+            watcherThread.setDaemon(true);
+            watcherThread.start();
+        } catch (IOException ioe) {
+            LOGGER.warning("problem occured while trying to watch changes on " + jsFile.getName());
+            LOGGER.throwing(JSFilter.class.getName(), "reloadOnChange", ioe);
+        }
+    }
+
+    private Optional<ScriptRunner> loadScriptRunner() {
+        ScriptEngine engine = null;
+        File file = null;
+        Logger scriptLogger = null;
+        if (this.fileName != null) {
+            file = new File(this.fileName);
+            if (file.canRead()) {
+                try {
+                    ClassLoader jsClassloader = JSFilter.class.getClassLoader();
+                    engine = new NashornScriptEngineFactory().getScriptEngine(jsClassloader);
+
+                    if (engine == null) {
+                        LOGGER.warning("undertow-jsfilters: Nashorn JavaScript engine not found");
+                    } else {
+                        try {
+                            LOGGER.config("undertow-jsfilters: using JavaScript engine: " + engine.getFactory().getEngineName() + " to load " + this.fileName);
+                            engine.eval(new FileReader(file));
+                            LOGGER.config("undertow-jsfilters: file loaded successfully");
+                        } catch (Exception evaluationException) {
+                            LOGGER.config("undertow-jsfilters: cannot evaluate js file => " + this.fileName);
+                            LOGGER.throwing(JSFilter.class.getName(), "handleRequest", evaluationException);
+                        }
+
+                        scriptLogger = Logger.getLogger(JSFilter.class.getName() + "." + file.getName());
+                    }
+                } catch(Exception ex) {
+                    LOGGER.warning("undertow-jsfilters: cannot load Nashorn JavaScript engine");
+                    LOGGER.throwing(JSFilter.class.getName(), "loadEngine", ex);
+                }
+            } else {
+                LOGGER.warning("undertow-jsfilters: non readable file => " + this.fileName);
+            }
+        } else {
+            LOGGER.warning("undertow-jsfilters: missing expected parameter 'fileName'");
+        }
+
+        if (file == null || engine == null || scriptLogger == null) {
+            return Optional.empty();
+        } else {
+            return Optional.of(new ScriptRunner(engine, file, scriptLogger));
         }
     }
 
@@ -94,5 +183,37 @@ public class JSFilter implements HttpHandler {
 
     public void setFileName(String fileName) {
         this.fileName = fileName;
+    }
+
+    public String getRefresh() {
+        return refresh;
+    }
+
+    public void setRefresh(String refresh) {
+        this.refresh = refresh;
+    }
+
+    private static class ScriptRunner {
+        private final ScriptEngine engine;
+        private final File file;
+        private final Logger scriptLogger;
+
+        ScriptRunner(ScriptEngine engine, File file, Logger scriptLogger) {
+            this.engine = engine;
+            this.file = file;
+            this.scriptLogger = scriptLogger;
+        }
+
+        public ScriptEngine getEngine() {
+            return engine;
+        }
+
+        public File getFile() {
+            return file;
+        }
+
+        public Logger getScriptLogger() {
+            return scriptLogger;
+        }
     }
 }
