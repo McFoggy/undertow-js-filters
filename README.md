@@ -6,6 +6,10 @@
 
 unzip `undertow-jsfilters-X.Y.Z-module.zip` inside `$WILDFLY_HOME`
 
+#### Wildfly <= 8.2.1.Final
+
+`Wildfly 8.2.1.Final` modules lack visibility of 'nashorn', apply [wildfly-core#12](https://github.com/wildfly/wildfly-core/pull/12) to correct that 
+
 ### configuration
 
 Update your `standalone.xml` accordingly to reference the filter
@@ -32,3 +36,5 @@ Update your `standalone.xml` accordingly to reference the filter
     </filters>
 </subsystem>
 ```
+
+
