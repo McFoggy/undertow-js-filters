@@ -2,9 +2,13 @@
 
 ## Usage
 
-### module deployment
+### module deployment for all Wildfly versions
 
 unzip `undertow-jsfilters-X.Y.Z-module.zip` inside `$WILDFLY_HOME`
+
+#### Wildfly 9, 10, 11, 12 & >
+
+Nashorn is accessible nothing special to do. 
 
 #### Wildfly <= 8.2.1.Final
 
@@ -37,4 +41,11 @@ Update your `standalone.xml` accordingly to reference the filter
 </subsystem>
 ```
 
+### Release
 
+- `mvn -Poss clean install`: this will simulate a full build for oss delivery (javadoc, source attachement, GPG signature, ...)
+- `git tag -a -s -m "release X.Y.Z, additionnal reason" X.Y.Z`: tag the current HEAD with the given tag name. The tag is signed by the author of the release. Adapt with gpg key of maintainer.
+    - Matthieu Brouillard command:  `git tag -a -s -u 2AB5F258 -m "release X.Y.Z, additionnal reason" X.Y.Z`
+    - Matthieu Brouillard [public key](https://sks-keyservers.net/pks/lookup?op=get&search=0x8139E8632AB5F258)
+- `mvn -Poss,release -DskipTests deploy`
+- `git push --follow-tags origin master`
