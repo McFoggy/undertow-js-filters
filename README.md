@@ -1,4 +1,5 @@
 # undertow-jsfilters
+[![Build Status](https://travis-ci.org/McFoggy/undertow-jsfilters.svg?branch=master)](https://travis-ci.org/McFoggy/undertow-jsfilters)
 
 ## Usage
 
